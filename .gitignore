@@ -3,3 +3,12 @@
 instance/
 __pycache__/
 *.py[cod]
+
+.venv312/
+.venv-*/
+.DS_Store
+.coverage*
+htmlcov/
+.ruff_cache/
+.env.*
+!.env.example
