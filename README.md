@@ -1,85 +1,132 @@
-# ProCheck — Theo dõi lỗi phần mềm
+# ProCheck · Issue Tracker and QA Dashboard
 
-ProCheck là web app tiếng Việt để ghi nhận, xử lý và kiểm thử lại lỗi trong một nhóm phát triển phần mềm. Stack gồm Python 3.11+, Flask, SQLAlchemy, SQL Server và HTML/CSS/JavaScript. Có chế độ SQLite để xem demo và chạy kiểm thử nhanh.
+[![CI workflow](https://img.shields.io/badge/CI-workflow-2088ff?logo=githubactions)](.github/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<!-- After publishing, replace the CI badge with https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg and link it to the workflow page. -->
 
-## Nâng cấp từ bản đầu tiên
+Track software defects from intake through verification. Assign a report to a developer, verify a fix against a named build, and reopen the issue with a reason if the defect returns. The interface is in Vietnamese.
 
-Dừng ứng dụng, chép đè mã nguồn từ ZIP vào thư mục ProCheck hiện tại, giữ lại tệp `.env` và thư mục `instance/`. Chạy lại `init-db` để tạo bảng `issue_verifications`; lệnh này giữ dữ liệu và tài khoản cũ. Mở lại ứng dụng bằng lệnh `run` đang dùng. Các lượt kiểm thử từ bản cũ vẫn được tính vào thống kê theo lịch sử trạng thái. Phiếu có môi trường và phiên bản xuất hiện từ bản này trở đi.
+**Stack** · Python 3.11+, Flask, SQLAlchemy, Alembic, Jinja, JavaScript, SQLite and SQL Server via ODBC.
 
-Ví dụ trên macOS nếu môi trường ảo đang dùng là `.venv312`:
+![Quality dashboard with open issues, severity and verification statistics](docs/screenshots/dashboard.png)
 
-```zsh
-./.venv312/bin/python -m flask --app procheck init-db
-./.venv312/bin/python -m flask --app procheck run --port 5050
+| Issue list and filters | QA verification form | Verification and assignment history |
+| --- | --- | --- |
+| ![Issue list](docs/screenshots/issues.png) | ![QA result form](docs/screenshots/verification.png) | ![Issue detail and history](docs/screenshots/history.png) |
+
+## Features
+
+- **Issue tracking** with search, severity and status filters, pagination and a **My work** filter.
+- **Role-based permissions** for Admin, Developer and Tester. Assignments reference workspace accounts.
+- **QA records** include outcome, environment, build and observations. Reopening requires a reason and is visible in the audit history.
+- **Quality dashboard** shows open high-severity issues, severity counts and pass rates per verification attempt across the workspace.
+
+| Role | Permissions |
+| --- | --- |
+| Admin | Create and assign issues, edit issues still being worked on, move through the workflow, record QA results and reopen |
+| Developer | Create issues and work on assigned or unassigned issues through the handoff to QA |
+| Tester | Create issues, record verification results, return failed fixes and reopen closed issues |
+
+## Quick start · macOS / Linux
+
+From the repository root with Python 3.11+:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+.venv/bin/python -c 'from dotenv import dotenv_values, set_key; from secrets import token_hex; key = dotenv_values(".env").get("SECRET_KEY"); set_key(".env", "SECRET_KEY", key if key and len(key) >= 32 else token_hex(32)); set_key(".env", "DATABASE_BACKEND", "sqlite")'
+.venv/bin/python -m flask --app procheck db-upgrade
+.venv/bin/python -m flask --app procheck create-user admin-demo --role admin
+.venv/bin/python -m flask --app procheck seed-demo admin-demo
+.venv/bin/python -m flask --app procheck run --port 5050
 ```
 
-## Chạy trên Windows với SQL Server Express
+Open [localhost:5050](http://127.0.0.1:5050). The create-user command prompts for a password of at least 12 characters. For a full role-based demo, also create `dev-demo --role dev` and `qa-demo --role tester` with the same command. Sign in as admin, assign a report to the developer, send it to QA as the developer, and verify or reopen it as the tester.
 
-Cài Python 3.11 trở lên, SQL Server Express, SSMS và **Microsoft ODBC Driver 18 for SQL Server**. Mở PowerShell tại thư mục có tệp `requirements.txt`.
+## Online demo · Render
 
-### 1. Cài thư viện và tạo khóa phiên
+`render.yaml` defines a read-only SQLite demo. Push the repository, connect it in Render using **New → Blueprint**, and deploy. Once deployed, add the assigned URL to this README. Demo sign-in uses **`demo`** / **`ProCheck-Demo-2026!`**. The service seeds its own sample dataset and uses a generated session key. Free instances may take time to wake and recreate the sample dataset after a restart.
+
+## Technical highlights
+
+| Implementation | Purpose |
+| --- | --- |
+| Version column and SQLAlchemy optimistic locking | Reject stale forms and detect concurrent database updates |
+| Single transaction per workflow change | Commit or roll back the issue, audit event and QA evidence together |
+| Backend authorization and CSRF tokens | Enforce role rules on POST requests, including direct requests to protected routes |
+| CSP and scrypt password hashing | Restrict browser resource loading and store password hashes instead of plaintext |
+| UTF-16 length validation | Match SQL Server `NVARCHAR` capacity, including characters that occupy two UTF-16 code units |
+| Alembic migrations | Upgrade supported existing schemas while preserving accounts, issues and audit history |
+
+## SQL Server · Docker Compose
+
+Use an x86-64 Docker host for the SQL Server image. On Apple Silicon use the native SQLite quick start or connect to SQL Server running on a supported host.
+
+Set `SECRET_KEY` and a strong `MSSQL_SA_PASSWORD` in `.env` before starting. Compose runs a local development database, applies migrations and exposes the app on port 5050. The database port stays inside the Compose network.
+
+```sh
+docker compose up --build
+```
+
+In a second terminal, create the first app account and seed it:
+
+```sh
+docker compose exec app python scripts/mssql_bootstrap.py python -m flask --app procheck create-user admin-demo --role admin
+docker compose exec app python scripts/mssql_bootstrap.py python -m flask --app procheck seed-demo admin-demo
+```
+
+### Windows · SQL Server Express
+
+Install Python 3.11+, SQL Server Express and Microsoft ODBC Driver 18. Run `database/create_database.sql` in SSMS. Copy `.env.example` to `.env` and set a fresh `SECRET_KEY`, `DATABASE_BACKEND=mssql` and the server instance in `MSSQL_ODBC_CONNECTION`. The sample uses Windows Authentication for local development. For a shared database, use a trusted SQL Server certificate and least-privilege service credentials.
 
 ```powershell
 py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_hex(32))"
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-mssql.txt
+.\.venv\Scripts\python.exe -m flask --app procheck db-upgrade
+.\.venv\Scripts\python.exe -m flask --app procheck create-user admin-demo --role admin
+.\.venv\Scripts\python.exe -m flask --app procheck seed-demo admin-demo
+.\.venv\Scripts\python.exe -m flask --app procheck run --port 5050
 ```
 
-Dán chuỗi vừa tạo vào `SECRET_KEY` trong `.env`. Mỗi máy dùng một khóa riêng. Tệp `.env` được bỏ qua khi đưa code lên Git.
+## Nâng cấp từ V1 hoặc V2
 
-### 2. Tạo cơ sở dữ liệu
+Dừng web và sao lưu cơ sở dữ liệu. Với SQLite, sao lưu thư mục `instance/` sau khi app đã dừng. Giữ lại `.env` và `instance/` khi cập nhật mã nguồn. Cài lại thư viện từ `requirements.txt` để có Alembic, rồi chạy:
 
-Trong SSMS, kết nối bằng **Windows Authentication**, mở rồi chạy tệp `database/create_database.sql`. Mặc định `.env` trỏ tới `localhost\SQLEXPRESS`. Nếu SSMS đang dùng tên máy chủ khác, thay giá trị `SERVER=` bằng tên đó. Tài khoản Windows chạy ứng dụng cần có quyền trên cơ sở dữ liệu ProCheck.
-
-Cấu hình mẫu dùng mã hóa kết nối và chấp nhận chứng chỉ cục bộ của SQL Server Express. Với máy chủ dùng chung, cấu hình chứng chỉ đáng tin cậy và đặt `TrustServerCertificate=no`. Có thể dùng tài khoản Windows riêng cho tiến trình web, cấp quyền đọc bảng tài khoản, đọc/thêm/sửa bảng báo cáo và đọc/thêm bảng lịch sử và phiếu kiểm thử. Tách quyền tạo bảng và quản lý tài khoản khỏi tiến trình web khi chạy trong môi trường dùng chung.
-
-### 3. Tạo bảng, tài khoản và mở ứng dụng
-
-```powershell
-.\.venv\Scripts\python.exe -m flask --app procheck init-db
-.\.venv\Scripts\python.exe -m flask --app procheck create-user tien
-.\.venv\Scripts\python.exe -m flask --app procheck seed-demo tien
-.\.venv\Scripts\python.exe -m flask --app procheck run --host 127.0.0.1
+```sh
+.venv312/bin/python -m pip install -r requirements.txt
+.venv312/bin/python -m flask --app procheck db-upgrade
+.venv312/bin/python -m flask --app procheck set-role tien-demo admin
+.venv312/bin/python -m flask --app procheck run --port 5050
 ```
 
-Lệnh `create-user` yêu cầu nhập mật khẩu hai lần và ẩn nội dung nhập. Dùng mật khẩu từ 12 đến 128 ký tự. Lệnh `seed-demo` là tùy chọn, thêm một báo cáo mẫu cho mỗi trạng thái và hai kết quả kiểm thử minh họa khi danh sách đang trống.
+Dùng đúng đường dẫn môi trường ảo và tên tài khoản đang có. Mặc định tài khoản cũ được gán vai trò **Developer**. Dòng `set-role` cấp quyền Admin cho tài khoản Vũ chọn. Tên người xử lý nhập tay từ bản cũ vẫn hiển thị đến khi Admin phân công theo tài khoản. Migration tự nhận diện cấu trúc cũ của ProCheck để giữ cả lịch sử và phiếu kiểm thử.
 
-Mở [http://127.0.0.1:5000](http://127.0.0.1:5000), đăng nhập bằng tài khoản vừa tạo. Cấu hình này phục vụ máy local. Khi tích hợp với máy chủ HTTPS dùng chung, cấu hình tên miền được phép trong `TRUSTED_HOSTS`, bật `SESSION_COOKIE_SECURE=1` và dùng máy chủ WSGI phù hợp.
+## Tests and repository layout
 
-### Xem nhanh với SQLite
-
-Làm bước 1, đổi `DATABASE_BACKEND=sqlite` trong `.env`, sau đó thực hiện thẳng bước 3. Dữ liệu demo nằm trong `instance/procheck.sqlite`. Hai chế độ dùng cơ sở dữ liệu riêng. Trên macOS hoặc Linux, dùng `python3 -m venv .venv` và thay đường dẫn Python trong lệnh bằng `.venv/bin/python`.
-
-## Cách dùng
-
-1. Bấm **Tạo báo cáo**. Nhập tiêu đề, mô tả, mức độ và tên người xử lý nếu đã phân công.
-2. Dùng ô tìm kiếm theo tiêu đề/tên người xử lý hoặc kết hợp bộ lọc mức độ và trạng thái. Bốn ô đầu trang hiển thị tổng báo cáo theo trạng thái.
-3. Mở báo cáo và cập nhật trạng thái theo luồng **Mới → Đang xử lý → Chờ kiểm thử → Đã đóng**.
-4. Ở trạng thái **Chờ kiểm thử**, chọn **Đạt · Đóng lỗi** hoặc **Chưa đạt · Trả về xử lý**. Nhập môi trường, phiên bản và kết quả thực tế hoặc lý do trả lại. Có thể gửi kiểm thử lại sau khi sửa.
-5. Xem lịch sử để biết ai tạo, sửa, chuyển trạng thái và từng kiểm thử trên bản nào. Tên người xử lý là nhãn phân công, có thể nhập tự do. Tài khoản đăng nhập được dùng để ghi người thực hiện thao tác. Các tài khoản tạo bằng CLI có quyền thao tác như nhau trong nhóm.
-6. Mở **Tổng quan chất lượng** để xem lỗi mức cao hoặc nghiêm trọng còn mở, phân bố theo mức độ và các phiếu kiểm thử gần đây. Tỷ lệ đạt = số lượt đạt chia cho tổng lượt đạt và trả lại trong toàn bộ lịch sử. Một báo cáo có thể có nhiều lượt kiểm thử.
-
-## Cấu trúc mã nguồn
-
-| Vị trí | Trách nhiệm |
-|---|---|
-| `procheck/__init__.py` | Khởi tạo Flask, kết nối cơ sở dữ liệu, CSRF, cấu hình cookie và các header HTTP |
-| `procheck/models.py` | Bảng tài khoản, báo cáo, lịch sử, phiếu kiểm thử và các quy tắc chuyển trạng thái |
-| `procheck/auth.py` | Đăng nhập, đăng xuất, nạp tài khoản và giới hạn số lần thử |
-| `procheck/issues.py` | Danh sách, bộ lọc, tạo/sửa, chuyển trạng thái, phiếu kiểm thử và tổng quan |
-| `procheck/commands.py` | Lệnh tạo bảng, tạo tài khoản và thêm dữ liệu mẫu |
-| `procheck/templates/` và `procheck/static/` | Giao diện Jinja, CSS và JavaScript |
-| `database/` và `tests/` | Tệp tạo cơ sở dữ liệu SQL Server và kiểm thử tự động |
-
-Ứng dụng băm mật khẩu bằng scrypt, dùng phiên ký bởi Flask và yêu cầu token CSRF cho biểu mẫu POST. Truy vấn dùng biểu thức SQLAlchemy có tham số. Jinja tự escape dữ liệu trong các template HTML. Khi lưu, số phiên bản báo cáo giúp phát hiện form cũ hoặc hai lượt sửa đồng thời. Thay đổi trên báo cáo, sự kiện lịch sử và phiếu kiểm thử được ghi trong cùng giao dịch. Giới hạn thử đăng nhập áp dụng theo địa chỉ IP trong từng tiến trình Flask.
-
-## Kiểm thử
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```sh
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/ruff check .
+.venv/bin/python -m coverage run -m unittest discover -s tests -v
+.venv/bin/python -m coverage report
 ```
 
-Bộ kiểm thử dùng SQLite tạm để kiểm tra đăng nhập, CSRF, giới hạn số lần thử, tạo/sửa, lọc và phân trang, luồng kiểm thử lại, tổng quan, form cũ và nâng cấp dữ liệu từ bản đầu tiên. Sau khi kết nối SQL Server Express trên máy Windows, có thể xác nhận bằng cách đăng nhập, tạo một báo cáo tiếng Việt, chuyển qua đủ bốn trạng thái rồi truy vấn `SELECT * FROM dbo.issue_verifications;` trong SSMS.
+The GitHub Actions workflow runs Ruff, the SQLite suite and coverage on pushes and pull requests. A separate job starts a real SQL Server container and exercises migrations, Unicode search, account assignment and QA persistence. The SQLite job publishes `coverage.xml`.
 
-Khi demo, bắt đầu từ lỗi nghiêm trọng, chuyển sang chờ kiểm thử, ghi một lượt **Chưa đạt** ở `v1.0`, sau đó gửi lại và ghi **Đạt** ở `v1.1`. Mở lịch sử để so sánh hai lượt, rồi mở trang tổng quan để xem hai phiếu và tỷ lệ đạt thay đổi.
+- `procheck/` contains routes, permissions, ORM models, templates and static assets.
+- `procheck/migrations/` contains versioned schema changes.
+- `tests/` contains SQLite regression tests and a SQL Server integration smoke test.
+- `docs/screenshots/` contains screenshots captured with sample data.
+
+## Đưa repo lên GitHub
+
+Gói ZIP có `ProCheck.git.bundle` để giữ các commit theo từng nhóm thay đổi. Tạo một thư mục repo mới từ bundle để đưa lên GitHub:
+
+```sh
+git clone --branch main ./ProCheck.git.bundle procheck-issue-tracker
+cd procheck-issue-tracker
+git remote set-url origin https://github.com/OWNER/procheck-issue-tracker.git
+git push -u origin main
+```
+
+Thay `OWNER` và URL bằng repo đã tạo. Thay badge CI liên kết với repo thật sau khi push. Link README, ảnh và lịch sử Git có thể dùng trong CV. Khi mô tả đóng góp, ghi rõ phần bạn trực tiếp phát triển hoặc kiểm thử.
