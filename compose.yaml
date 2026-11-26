@@ -1,0 +1,23 @@
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}"
+    volumes:
+      - sql_data:/var/opt/mssql
+  app:
+    build: .
+    platform: linux/amd64
+    depends_on:
+      - db
+    environment:
+      DATABASE_BACKEND: mssql
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}"
+      SECRET_KEY: "${SECRET_KEY:?Generate SECRET_KEY in .env}"
+    ports:
+      - "127.0.0.1:5050:5050"
+volumes:
+  sql_data:
