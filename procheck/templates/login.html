@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Đăng nhập · ProCheck{% endblock %}
+{% block main_class %}login-layout{% endblock %}
+{% block content %}
+<section class="panel card login-card">
+  <h1>Đăng nhập</h1>
+  <p>Sử dụng tài khoản ProCheck để vào danh sách báo cáo lỗi.</p>
+  <form class="form-stack" method="post">
+    {% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <label>Tên đăng nhập<input name="username" autocomplete="username" required maxlength="40"></label>
+    <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+    <button class="button primary" type="submit">Đăng nhập</button>
+  </form>
+</section>
+{% endblock %}

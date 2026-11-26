@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan chất lượng · ProCheck{% endblock %}
+{% block content %}
+<header class="page-heading">
+  <div><h1>Tổng quan chất lượng</h1><p>Theo dõi lỗi còn mở và kết quả kiểm thử.</p></div>
+  <a class="button primary" href="{{ url_for('issues.issue_form') }}">Tạo báo cáo</a>
+</header>
+
+<div class="summary" aria-label="Thống kê toàn bộ dữ liệu">
+  <div class="stat"><span class="status-name">Lỗi còn mở</span><strong>{{ open_total }}</strong></div>
+  <div class="stat"><span class="status-name">Lượt kiểm thử đạt</span><strong>{{ passed }}</strong></div>
+  <div class="stat"><span class="status-name">Lượt trả lại xử lý</span><strong>{{ returned }}</strong></div>
+  <div class="stat"><span class="status-name">Tỷ lệ kiểm thử đạt</span><strong>{{ (pass_rate|string ~ '%') if pass_rate is not none else '—' }}</strong></div>
+</div>
+
+<div class="dashboard-grid">
+  <section class="panel card">
+    <h2>Lỗi cần ưu tiên</h2>
+    <p class="muted">Lỗi mức cao hoặc nghiêm trọng đang mở, tối đa 8 báo cáo.</p>
+    <ul class="dashboard-list">
+      {% for issue in blockers %}
+      <li>
+        <div><span class="issue-id">#{{ issue.id }}</span><a class="issue-link" href="{{ url_for('issues.detail', issue_id=issue.id) }}">{{ issue.title }}</a><div class="time">{{ statuses[issue.status] }} · {{ issue.assignee or 'Chưa phân công' }}</div></div>
+        <span class="pill {{ issue.severity }}">{{ severities[issue.severity] }}</span>
+      </li>
+      {% else %}<li>Không có lỗi mức cao hoặc nghiêm trọng đang mở.</li>{% endfor %}
+    </ul>
+  </section>
+  <section class="panel card">
+    <h2>Lỗi còn mở theo mức độ</h2>
+    <ul class="severity-chart">
+      {% for key, label in severities.items()|reverse %}
+      {% set count = severity_counts.get(key, 0) %}
+      <li>
+        <span><span class="pill {{ key }}">{{ label }}</span><strong>{{ count }}</strong></span>
+        <meter min="0" max="{{ open_total or 1 }}" value="{{ count }}" aria-label="{{ label }}"></meter>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<section class="panel card recent-reviews">
+  <h2>Phiếu kiểm thử gần đây</h2>
+  <ul class="dashboard-list">
+    {% for event, title, username, verification in recent %}
+    <li>
+      <div>
+        <a class="issue-link" href="{{ url_for('issues.detail', issue_id=event.issue_id) }}#event-{{ event.id }}">{{ title }}</a>
+        <div class="time">{{ username }} · {{ event.created_at|local_time }} · {{ verification.environment }} · {{ verification.build }}</div>
+      </div>
+      <span class="pill {{ 'closed' if event.next_status == 'closed' else 'high' }}">{{ 'Đạt' if event.next_status == 'closed' else 'Chưa đạt' }}</span>
+    </li>
+    {% else %}<li>Chưa có phiếu kiểm thử.</li>{% endfor %}
+  </ul>
+</section>
+{% endblock %}

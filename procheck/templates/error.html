@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ error.code }} · ProCheck{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<div class="panel card error-page">
+  <p class="eyebrow">LỖI {{ error.code }}</p>
+  <h1>{{ {400: 'Yêu cầu không hợp lệ', 404: 'Không tìm thấy', 409: 'Không thể cập nhật', 413: 'Dữ liệu vượt giới hạn', 422: 'Dữ liệu chưa hợp lệ', 429: 'Quá nhiều lần thử', 500: 'Máy chủ gặp sự cố'}.get(error.code, 'Không thể xử lý yêu cầu') }}</h1>
+  {% if error.code in [400, 404, 409, 422, 429] %}<p>{{ error.description }}</p>{% endif %}
+  <a class="button secondary" href="{{ url_for('issues.index') }}">Về danh sách báo cáo</a>
+</div>
+{% endblock %}

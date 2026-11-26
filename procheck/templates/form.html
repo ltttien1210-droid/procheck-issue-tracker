@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Sửa báo cáo' if issue else 'Tạo báo cáo' }} · ProCheck{% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+{% set back_url = url_for('issues.detail', issue_id=issue.id) if issue else url_for('issues.index') %}
+<a class="back" href="{{ back_url }}">← Quay lại</a>
+<header class="page-heading"><div><h1>{{ 'Sửa báo cáo' if issue else 'Tạo báo cáo' }}</h1><p>Ghi rõ các bước tái hiện và kết quả mong đợi.</p></div></header>
+{% macro error_for(field) %}{% if field in errors %}<small class="field-error" id="{{ field }}-error">{{ errors[field] }}</small>{% endif %}{% endmacro %}
+{% macro field_attributes(field) %}{% if field in errors %}aria-invalid="true" aria-describedby="{{ field }}-error"{% endif %}{% endmacro %}
+<form class="panel card form-stack" method="post">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  {% if issue %}<input type="hidden" name="version" value="{{ issue.version }}">{% endif %}
+  {% if errors %}<div class="alert error" role="alert">Kiểm tra lại các trường được đánh dấu.</div>{% endif %}
+  <label>Tiêu đề<input name="title" value="{{ values.title }}" required minlength="5" maxlength="120" {{ field_attributes('title') }}>{{ error_for('title') }}</label>
+  <label>Mô tả lỗi<textarea name="description" required minlength="10" maxlength="4000" rows="7" {{ field_attributes('description') }}>{{ values.description }}</textarea>{{ error_for('description') }}</label>
+  <div class="form-row">
+    <label>Mức độ<select name="severity" required {{ field_attributes('severity') }}>
+      {% if values.severity not in severities %}<option value="" selected>Chọn mức độ</option>{% endif %}
+      {% for key, label in severities.items() %}<option value="{{ key }}" {% if values.severity == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>{{ error_for('severity') }}</label>
+    <label>Người xử lý<input name="assignee" maxlength="80" value="{{ values.assignee }}" placeholder="Có thể để trống" {{ field_attributes('assignee') }}>{{ error_for('assignee') }}</label>
+  </div>
+  <div class="form-actions"><a class="button secondary" href="{{ back_url }}">Hủy</a><button class="button primary" type="submit">{{ 'Lưu thay đổi' if issue else 'Tạo báo cáo' }}</button></div>
+</form>
+{% endblock %}

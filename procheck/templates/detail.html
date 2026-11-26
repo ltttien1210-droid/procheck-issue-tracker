@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}#{{ issue.id }} · ProCheck{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('issues.index') }}">← Danh sách báo cáo</a>
+<header class="page-heading">
+  <div><p class="eyebrow">BÁO CÁO #{{ issue.id }}</p><h1>{{ issue.title }}</h1>
+      <p>Tạo lúc {{ issue.created_at|local_time }}</p></div>
+  {% if issue.status != 'closed' %}<a class="button secondary" href="{{ url_for('issues.issue_form', issue_id=issue.id) }}">Sửa báo cáo</a>{% endif %}
+</header>
+<ol class="workflow" aria-label="Quy trình xử lý">
+  {% for key, label in statuses.items() %}
+    <li {% if key == issue.status %}aria-current="step"{% endif %}><span class="dot {{ key }}"></span>{{ label }}</li>
+  {% endfor %}
+</ol>
+<div class="detail-grid">
+  <div class="stack">
+    <section class="panel card"><h2>Mô tả lỗi</h2><p class="description">{{ issue.description }}</p></section>
+    <section class="panel card">
+      <h2>Lịch sử xử lý</h2>
+      <ol class="timeline">
+        {% for event, username, verification in events %}
+        <li id="event-{{ event.id }}">
+          <strong>{% if event.action == 'created' %}Tạo báo cáo{% elif event.action == 'seed' %}Thêm báo cáo mẫu{% elif event.action == 'edited' %}Sửa báo cáo{% else %}{{ statuses[event.previous_status] }} → {{ statuses[event.next_status] }}{% endif %}</strong>
+          <div class="time">{{ username }} · {{ event.created_at|local_time }}</div>
+          {% if verification %}
+            <div class="verification-meta">
+              <span class="pill {{ 'closed' if event.next_status == 'closed' else 'high' }}">{{ 'Đạt' if event.next_status == 'closed' else 'Chưa đạt' }}</span>
+              <span>{{ verification.environment }} · {{ verification.build }}</span>
+            </div>
+          {% endif %}
+          {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+        </li>
+        {% else %}
+        <li>Chưa có hoạt động.</li>
+        {% endfor %}
+      </ol>
+    </section>
+  </div>
+  <aside class="stack">
+    <section class="panel card"><h2>Thông tin báo cáo</h2>
+      <dl class="fields">
+        <dt>Trạng thái</dt><dd><span class="pill {{ issue.status }}">{{ statuses[issue.status] }}</span></dd>
+        <dt>Mức độ</dt><dd><span class="pill {{ issue.severity }}">{{ severities[issue.severity] }}</span></dd>
+        <dt>Người xử lý</dt><dd>{{ issue.assignee or 'Chưa phân công' }}</dd>
+      </dl>
+    </section>
+    {% if transitions %}
+    <section class="panel card">
+      {% set testing = issue.status == 'testing' %}
+      <h2>{{ 'Ghi kết quả kiểm thử' if testing else 'Cập nhật trạng thái' }}</h2>
+      {% macro show_error(field) %}{% if field in errors %}<small class="field-error" id="{{ field }}-error">{{ errors[field] }}</small>{% endif %}{% endmacro %}
+      {% macro error_attributes(field) %}{% if field in errors %}aria-invalid="true" aria-describedby="{{ field }}-error"{% endif %}{% endmacro %}
+      <form method="post" action="{{ url_for('issues.change_status', issue_id=issue.id) }}" class="form-stack" {% if testing %}data-verification-form{% endif %}>
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="version" value="{{ issue.version }}">
+        {% if errors %}<div class="alert error" role="alert">Kiểm tra lại các trường được đánh dấu.</div>{% endif %}
+        <label><span id="outcome-label">{{ 'Kết quả' if testing else 'Bước tiếp theo' }}</span><select name="status" aria-labelledby="outcome-label">
+          {% for target in transitions %}
+          <option value="{{ target }}" {% if values.get('status') == target %}selected{% endif %}>
+            {% if testing %}{{ 'Đạt · Đóng lỗi' if target == 'closed' else 'Chưa đạt · Trả về xử lý' }}{% else %}{{ transition_labels[target] }}{% endif %}
+          </option>
+          {% endfor %}
+        </select></label>
+        {% if testing %}
+        <label>Môi trường kiểm thử<input name="environment" required maxlength="120" value="{{ values.get('environment', '') }}" placeholder="VD: Staging · Chrome" {{ error_attributes('environment') }}>{{ show_error('environment') }}</label>
+        <label>Phiên bản kiểm thử<input name="build" required maxlength="80" value="{{ values.get('build', '') }}" placeholder="VD: v1.2.0" {{ error_attributes('build') }}>{{ show_error('build') }}</label>
+        {% endif %}
+        <label><span id="note-label">{{ 'Kết quả thực tế hoặc lý do trả lại' if testing else 'Ghi chú (tùy chọn)' }}</span><textarea name="note" rows="3" maxlength="500" {% if testing %}required{% endif %} {{ error_attributes('note') }}>{{ values.get('note', '') }}</textarea>{{ show_error('note') }}</label>
+        <button class="button primary" type="submit">{{ 'Lưu kết quả' if testing else 'Lưu trạng thái' }}</button>
+      </form>
+    </section>
+    {% endif %}
+  </aside>
+</div>
+{% endblock %}
