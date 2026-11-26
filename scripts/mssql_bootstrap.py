@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+from contextlib import closing
 
 import pyodbc
 
@@ -19,7 +20,7 @@ def main():
     os.environ["MSSQL_ODBC_CONNECTION"] = connection + "DATABASE=ProCheck;"
     for _ in range(60):
         try:
-            with pyodbc.connect(connection + "DATABASE=master;", autocommit=True, timeout=2) as db:
+            with closing(pyodbc.connect(connection + "DATABASE=master;", autocommit=True, timeout=2)) as db:
                 db.execute("IF DB_ID(N'ProCheck') IS NULL CREATE DATABASE [ProCheck]")
             break
         except pyodbc.Error:
@@ -31,7 +32,9 @@ def main():
     from procheck.migration import upgrade_database
 
     app = create_app()
-    upgrade_database(app.extensions["procheck_engine"])
+    engine = app.extensions["procheck_engine"]
+    upgrade_database(engine)
+    engine.dispose()
 
     if len(sys.argv) > 1:
         os.execvp(sys.argv[1], sys.argv[1:])

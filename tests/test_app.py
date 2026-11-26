@@ -176,33 +176,43 @@ class ProCheckTests(unittest.TestCase):
             self.assertEqual(len(second.scalars(select(IssueEvent)).all()), 1)
 
     def test_upgrade_preserves_existing_issues_and_events(self):
-        with tempfile.TemporaryDirectory() as folder:
-            app = create_app(self.app.config | {"SQLITE_PATH": Path(folder) / "legacy.sqlite"})
-            engine = app.extensions["procheck_engine"]
-            self.addCleanup(engine.dispose)
-            config = Config()
-            config.set_main_option("script_location", str(Path(app.root_path) / "migrations"))
-            with engine.begin() as connection:
-                config.attributes["connection"] = connection
-                command.upgrade(config, "0002")
-                connection.exec_driver_sql("DROP TABLE alembic_version")
-                connection.exec_driver_sql("INSERT INTO accounts VALUES (1, 'old', 'hash')")
-                connection.exec_driver_sql(
-                    "INSERT INTO issues VALUES (1, 'Lỗi cũ', 'Mô tả', 'high', 'new', 'Hà', "
-                    "'2026-01-01', '2026-01-01', 1)"
-                )
-                connection.exec_driver_sql(
-                    "INSERT INTO issue_events VALUES (1, 1, 1, 'created', NULL, 'new', '', '2026-01-01')"
-                )
-            for _ in range(2):
-                result = app.test_cli_runner().invoke(args=["db-upgrade"])
-                self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("alembic_version", inspect(engine).get_table_names())
-            with app.app_context(), db_session() as db:
-                self.assertEqual(db.get(Account, 1).role, "dev")
-                self.assertEqual(db.get(Issue, 1).assignee_name, "Hà")
-                self.assertEqual(db.get(IssueEvent, 1).next_status, "new")
-            engine.dispose()
+        for revision in ("0001", "0002"):
+            with self.subTest(revision=revision), tempfile.TemporaryDirectory() as folder:
+                app = create_app(self.app.config | {"SQLITE_PATH": Path(folder) / "legacy.sqlite"})
+                engine = app.extensions["procheck_engine"]
+                config = Config()
+                config.set_main_option("script_location", str(Path(app.root_path) / "migrations"))
+                with engine.begin() as connection:
+                    config.attributes["connection"] = connection
+                    command.upgrade(config, revision)
+                    connection.exec_driver_sql("DROP TABLE alembic_version")
+                    connection.exec_driver_sql("INSERT INTO accounts VALUES (1, 'old', 'hash')")
+                    connection.exec_driver_sql(
+                        "INSERT INTO issues VALUES (1, 'Lỗi cũ', 'Mô tả', 'high', 'new', 'Hà', "
+                        "'2026-01-01', '2026-01-01', 1)"
+                    )
+                    connection.exec_driver_sql(
+                        "INSERT INTO issue_events VALUES (1, 1, 1, 'created', NULL, 'new', '', '2026-01-01')"
+                    )
+                    if revision == "0002":
+                        connection.exec_driver_sql(
+                            "INSERT INTO issue_events VALUES (2, 1, 1, 'status', 'testing', 'closed', "
+                            "'Đạt', '2026-01-01')"
+                        )
+                        connection.exec_driver_sql(
+                            "INSERT INTO issue_verifications VALUES (2, 'Chrome', 'v2.0')"
+                        )
+                for _ in range(2):
+                    result = app.test_cli_runner().invoke(args=["db-upgrade"])
+                    self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn("alembic_version", inspect(engine).get_table_names())
+                with app.app_context(), db_session() as db:
+                    self.assertEqual(db.get(Account, 1).role, "dev")
+                    self.assertEqual(db.get(Issue, 1).assignee_name, "Hà")
+                    self.assertEqual(db.get(IssueEvent, 1).next_status, "new")
+                    if revision == "0002":
+                        self.assertEqual(db.get(Verification, 2).build, "v2.0")
+                engine.dispose()
 
     def test_roles_assignment_and_reopen(self):
         cli = self.app.test_cli_runner()
