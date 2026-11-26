@@ -1,11 +1,30 @@
-from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    abort,
+    flash,
+    g,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import StaleDataError
 
 from .auth import login_required
 from .models import (
-    SEVERITIES, STATUSES, TRANSITIONS, Account, Issue, IssueEvent, Verification, db_session,
+    ROLES,
+    SEVERITIES,
+    STATUSES,
+    TRANSITIONS,
+    Account,
+    Issue,
+    IssueEvent,
+    Verification,
+    db_session,
 )
+from .permissions import can_assign, can_edit, can_transition, can_write
 
 issues = Blueprint("issues", __name__)
 PAGE_SIZE = 12
@@ -15,6 +34,8 @@ PAGE_SIZE = 12
 def issue_labels():
     return {
         "severities": SEVERITIES,
+        "roles": ROLES,
+        "allow_write": can_write(),
         "statuses": STATUSES,
         "transition_labels": {
             "in_progress": "Bắt đầu xử lý",
@@ -29,11 +50,12 @@ def issue_labels():
 def index():
     severity = request.args.get("severity", "")
     status = request.args.get("status", "")
+    mine = request.args.get("mine") == "1"
     search = request.args.get("q", "").strip()[:120]
     if (severity and severity not in SEVERITIES) or (status and status not in STATUSES):
         abort(400, "Bộ lọc không hợp lệ.")
 
-    conditions = []
+    conditions = [Issue.assignee_id == g.account.id] if mine else []
     if severity:
         conditions.append(Issue.severity == severity)
     if status:
@@ -43,7 +65,11 @@ def index():
     if search:
         escaped = search.replace("/", "//").replace("%", "/%").replace("_", "/_").replace("[", "/[")
         pattern = f"%{escaped}%"
-        conditions.append(or_(Issue.title.ilike(pattern, escape="/"), Issue.assignee.ilike(pattern, escape="/")))
+        conditions.append(or_(
+            Issue.title.ilike(pattern, escape="/"),
+            Issue.assignee.ilike(pattern, escape="/"),
+            Issue.assignee_account.has(Account.username.ilike(pattern, escape="/")),
+        ))
 
     with db_session() as db:
         counts = dict(db.execute(select(Issue.status, func.count()).group_by(Issue.status)).all())
@@ -51,14 +77,14 @@ def index():
         pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(max(1, request.args.get("page", 1, type=int)), pages)
         rows = db.scalars(
-            select(Issue).where(*conditions)
+            select(Issue).options(joinedload(Issue.assignee_account)).where(*conditions)
             .order_by(Issue.updated_at.desc(), Issue.id.desc())
             .offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
         ).all()
 
     return render_template(
         "index.html", rows=rows, counts=counts, total=total, page=page,
-        pages=pages, severity=severity, status=status, search=search,
+        pages=pages, severity=severity, status=status, search=search, mine=mine,
     )
 
 
@@ -77,7 +103,7 @@ def dashboard():
             .group_by(IssueEvent.next_status)
         ).all())
         blockers = db.scalars(
-            select(Issue)
+            select(Issue).options(joinedload(Issue.assignee_account))
             .where(Issue.status != "closed", Issue.severity.in_(("critical", "high")))
             .order_by(
                 case((Issue.severity == "critical", 0), else_=1),
@@ -122,7 +148,8 @@ def render_detail(db, issue, values=None, errors=None):
         .order_by(IssueEvent.id.desc())
     ).all()
     return render_template(
-        "detail.html", issue=issue, events=events, transitions=TRANSITIONS[issue.status],
+        "detail.html", issue=issue, events=events,
+        editable=can_edit(issue), transitions=TRANSITIONS[issue.status] if can_transition(issue) else (),
         values=values or {}, errors=errors or {},
     ), (422 if errors else 200)
 
@@ -132,46 +159,73 @@ def render_detail(db, issue, values=None, errors=None):
 @login_required
 def issue_form(issue_id=None):
     errors = {}
+    if not can_write():
+        abort(403, "Bản demo trực tuyến chỉ cho phép xem.")
     with db_session() as db:
         issue = get_issue(db, issue_id) if issue_id is not None else None
         if issue and issue.status == "closed":
             abort(409, "Báo cáo đã đóng. Thông tin được giữ lại để tra cứu.")
 
+        if issue and not can_edit(issue):
+            abort(403, "Tài khoản này không có quyền sửa báo cáo.")
+
+        assignable = db.scalars(
+            select(Account).where(Account.role.in_(("admin", "dev"))).order_by(Account.username)
+        ).all() if can_assign() else []
+        assignment = str(issue.assignee_id) if issue and issue.assignee_id else ""
         values = {
             "title": issue.title if issue else "",
             "description": issue.description if issue else "",
             "severity": issue.severity if issue else "medium",
-            "assignee": issue.assignee if issue else "",
         }
         if request.method == "POST":
             if issue:
                 check_version(issue)
             values = {field: request.form.get(field, "").strip() for field in values}
             errors = validate_issue(values)
+            if can_assign():
+                assignment = request.form.get("assignee_id", assignment)
+                if assignment and assignment not in {str(account.id) for account in assignable}:
+                    errors["assignee_id"] = "Chọn tài khoản Admin hoặc Developer hợp lệ."
+                elif assignment:
+                    values["assignee_id"] = int(assignment)
+                    values["assignee"] = ""
+                elif issue and issue.assignee_id:
+                    values["assignee_id"] = None
             if not errors:
                 if issue is None:
                     issue = Issue(**values)
                     db.add(issue)
                     db.flush()
                     record_event(db, issue, "created", next_status="new")
+                    if issue.assignee_id:
+                        assignee = next(account.username for account in assignable if account.id == issue.assignee_id)
+                        record_event(db, issue, "assigned", note=f"Người xử lý: {assignee}.")
                     message = "Đã tạo báo cáo lỗi."
                 else:
                     fields = {
                         "title": "tiêu đề", "description": "mô tả",
-                        "severity": "mức độ", "assignee": "người xử lý",
+                        "severity": "mức độ", "assignee_id": "người xử lý",
                     }
-                    changed = [field for field in values if getattr(issue, field) != values[field]]
+                    changed = [field for field in fields if field in values and getattr(issue, field) != values[field]]
                     for field in changed:
                         setattr(issue, field, values[field])
-                    if changed:
-                        record_event(db, issue, "edited", note="Đã sửa " + ", ".join(fields[field] for field in changed) + ".")
+                    if "assignee_id" in changed:
+                        assignee = next((account.username for account in assignable if account.id == issue.assignee_id), "")
+                        record_event(db, issue, "assigned", note=f"Người xử lý: {assignee or 'Chưa phân công'}.")
+                    content_changes = [fields[field] for field in changed if field != "assignee_id"]
+                    if content_changes:
+                        record_event(db, issue, "edited", note="Đã sửa " + ", ".join(content_changes) + ".")
                     message = "Đã lưu báo cáo." if changed else "Chưa có thay đổi."
                 saved_id = issue.id
                 commit(db)
                 flash(message)
                 return redirect(url_for("issues.detail", issue_id=saved_id), code=303)
 
-    return render_template("form.html", issue=issue, values=values, errors=errors), (422 if errors else 200)
+    return render_template(
+        "form.html", issue=issue, values=values, errors=errors, assignable=assignable,
+        assignment=assignment, allow_assignment=can_assign(),
+    ), (422 if errors else 200)
 
 
 @issues.post("/loi/<int:issue_id>/trang-thai")
@@ -179,6 +233,8 @@ def issue_form(issue_id=None):
 def change_status(issue_id):
     with db_session() as db:
         issue = get_issue(db, issue_id)
+        if not can_transition(issue):
+            abort(403, "Tài khoản này không có quyền chuyển trạng thái.")
         check_version(issue)
         target = request.form.get("status")
         if target not in TRANSITIONS[issue.status]:
@@ -188,7 +244,7 @@ def change_status(issue_id):
         values["status"] = target
         previous = issue.status
         is_verification = previous == "testing"
-        errors = validate_transition(values, is_verification)
+        errors = validate_transition(values, previous)
         if errors:
             return render_detail(db, issue, values, errors)
 
@@ -205,7 +261,8 @@ def change_status(issue_id):
     return redirect(url_for("issues.detail", issue_id=issue_id), code=303)
 
 
-def validate_transition(values, is_verification):
+def validate_transition(values, previous):
+    is_verification = previous == "testing"
     errors = {}
     limits = {"note": 500}
     if is_verification:
@@ -216,6 +273,8 @@ def validate_transition(values, is_verification):
             errors[field] = f"Nhập văn bản hợp lệ, tối đa {limit} ký tự."
         elif is_verification and not value:
             errors[field] = "Hãy nhập thông tin này để lưu kết quả kiểm thử."
+        elif previous == "closed" and not value:
+            errors[field] = "Hãy ghi lý do mở lại lỗi."
     return errors
 
 
@@ -229,7 +288,6 @@ def validate_issue(values):
     for field, minimum, maximum, label in (
         ("title", 5, 120, "Tiêu đề"),
         ("description", 10, 4000, "Mô tả"),
-        ("assignee", 0, 80, "Người xử lý"),
     ):
         value = values[field]
         if len(value) < minimum or utf16_length(value) > maximum or "\x00" in value:

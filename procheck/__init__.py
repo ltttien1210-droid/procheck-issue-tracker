@@ -19,6 +19,10 @@ from .issues import issues
 def create_app(test_config=None):
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", interpolate=False)
     app = Flask(__name__, instance_relative_config=True)
+    trusted_hosts = ["localhost", "127.0.0.1", "[::1]"]
+    trusted_hosts.extend(filter(None, (host.strip() for host in os.getenv("PROCHECK_HOSTS", "").split(","))))
+    if render_host := os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+        trusted_hosts.append(render_host)
     app.config.from_mapping(
         SECRET_KEY=os.getenv("SECRET_KEY"),
         DATABASE_BACKEND=os.getenv("DATABASE_BACKEND", "mssql"),
@@ -29,7 +33,8 @@ def create_app(test_config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
         SESSION_REFRESH_EACH_REQUEST=False,
         MAX_CONTENT_LENGTH=64 * 1024,
-        TRUSTED_HOSTS=["localhost", "127.0.0.1", "[::1]"],
+        TRUSTED_HOSTS=trusted_hosts,
+        DEMO_READ_ONLY=os.getenv("PROCHECK_DEMO_READ_ONLY") == "1",
     )
     app.config.update(test_config or {})
 
@@ -67,9 +72,15 @@ def create_app(test_config=None):
 
     app.jinja_env.globals["csrf_token"] = csrf_token
 
+    @app.get("/healthz")
+    def health():
+        return {"status": "ok"}
+
     @app.before_request
     def protect_post():
         if request.method == "POST":
+            if request.blueprint == "issues" and app.config["DEMO_READ_ONLY"]:
+                abort(403, "Bản demo trực tuyến chỉ cho phép xem.")
             expected = session.get("_csrf", "").encode("utf-8")
             supplied = request.form.get("_csrf", "").encode("utf-8")
             if not expected or not compare_digest(expected, supplied):

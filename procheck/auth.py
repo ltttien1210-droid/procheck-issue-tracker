@@ -3,7 +3,17 @@ from functools import wraps
 from threading import Lock
 from time import monotonic
 
-from flask import Blueprint, abort, current_app, g, redirect, render_template, request, session, url_for
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    g,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from sqlalchemy import select
 from werkzeug.security import check_password_hash, generate_password_hash
 

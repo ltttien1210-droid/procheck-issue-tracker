@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sqlalchemy import select
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import inspect, select
 from sqlalchemy.orm.exc import StaleDataError
 from werkzeug.security import check_password_hash
 
@@ -28,16 +30,16 @@ class ProCheckTests(unittest.TestCase):
         result = cli.invoke(args=["init-db"])
         self.assertEqual(result.exit_code, 0, result.output)
         result = cli.invoke(
-            args=["create-user", "tester"],
+            args=["create-user", "tester", "--role", "admin"],
             input="Only-for-tests!77\nOnly-for-tests!77\n",
         )
         self.assertEqual(result.exit_code, 0, result.output)
 
-    def login(self, password="Only-for-tests!77"):
+    def login(self, password="Only-for-tests!77", username="tester"):
         page = self.client.get("/dang-nhap")
         token = re.search(r'name="_csrf" value="([^"]+)"', page.text).group(1)
         return self.client.post("/dang-nhap", data={
-            "_csrf": token, "username": "tester", "password": password,
+            "_csrf": token, "username": username, "password": password,
         })
 
     def csrf(self):
@@ -153,7 +155,7 @@ class ProCheckTests(unittest.TestCase):
         self.assertEqual(self.client.post(path + "/sua", data=data).status_code, 409)
         detail = self.client.get(path).text
         self.assertIn("Nội dung đã cập nhật", detail)
-        self.assertIn("Đã sửa tiêu đề, mô tả, mức độ, người xử lý.", detail)
+        self.assertIn("Đã sửa tiêu đề, mô tả, mức độ.", detail)
 
     def test_concurrent_database_update_rolls_back_history(self):
         self.login()
@@ -174,17 +176,82 @@ class ProCheckTests(unittest.TestCase):
             self.assertEqual(len(second.scalars(select(IssueEvent)).all()), 1)
 
     def test_upgrade_preserves_existing_issues_and_events(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = create_app(self.app.config | {"SQLITE_PATH": Path(folder) / "legacy.sqlite"})
+            engine = app.extensions["procheck_engine"]
+            self.addCleanup(engine.dispose)
+            config = Config()
+            config.set_main_option("script_location", str(Path(app.root_path) / "migrations"))
+            with engine.begin() as connection:
+                config.attributes["connection"] = connection
+                command.upgrade(config, "0002")
+                connection.exec_driver_sql("DROP TABLE alembic_version")
+                connection.exec_driver_sql("INSERT INTO accounts VALUES (1, 'old', 'hash')")
+                connection.exec_driver_sql(
+                    "INSERT INTO issues VALUES (1, 'Lỗi cũ', 'Mô tả', 'high', 'new', 'Hà', "
+                    "'2026-01-01', '2026-01-01', 1)"
+                )
+                connection.exec_driver_sql(
+                    "INSERT INTO issue_events VALUES (1, 1, 1, 'created', NULL, 'new', '', '2026-01-01')"
+                )
+            for _ in range(2):
+                result = app.test_cli_runner().invoke(args=["db-upgrade"])
+                self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("alembic_version", inspect(engine).get_table_names())
+            with app.app_context(), db_session() as db:
+                self.assertEqual(db.get(Account, 1).role, "dev")
+                self.assertEqual(db.get(Issue, 1).assignee_name, "Hà")
+                self.assertEqual(db.get(IssueEvent, 1).next_status, "new")
+            engine.dispose()
+
+    def test_roles_assignment_and_reopen(self):
+        cli = self.app.test_cli_runner()
+        for username, role in (("dev-one", "dev"), ("dev-two", "dev"), ("qa-demo", "tester")):
+            result = cli.invoke(args=["create-user", username, "--role", role, "--password", "Only-for-tests!77"])
+            self.assertEqual(result.exit_code, 0, result.output)
+        with self.app.app_context(), db_session() as db:
+            dev_id = db.scalar(select(Account.id).where(Account.username == "dev-one"))
+            qa_id = db.scalar(select(Account.id).where(Account.username == "qa-demo"))
+
+        def switch_user(username):
+            self.client = self.app.test_client()
+            self.assertEqual(self.login(username=username).status_code, 302)
+
         self.login()
-        path = self.create_issue(title="Lỗi dữ liệu từ V1").location
-        engine = self.app.extensions["procheck_engine"]
-        Verification.__table__.drop(engine)
-        self.assertEqual(self.app.test_cli_runner().invoke(args=["init-db"]).exit_code, 0)
-        self.assertIn("Lỗi dữ liệu từ V1", self.client.get(path).text)
-        self.assertIn("Tạo báo cáo", self.client.get(path).text)
-        dashboard = self.client.get("/bao-cao")
-        self.assertEqual(dashboard.status_code, 200)
-        self.assertIn("Lỗi dữ liệu từ V1", dashboard.text)
-        self.assertIn("Chưa có phiếu kiểm thử.", dashboard.text)
+        self.assertEqual(self.create_issue(assignee_id=qa_id).status_code, 422)
+        path = self.create_issue(assignee_id=dev_id).location
+        self.assertIn("Phân công", self.client.get(path).text)
+        switch_user("dev-two")
+        self.assertEqual(self.client.get(path + "/sua").status_code, 403)
+        self.assertEqual(self.move(path, "in_progress", version=1).status_code, 403)
+        self.assertIn("0 kết quả", self.client.get("/?mine=1").text)
+
+        switch_user("dev-one")
+        self.assertIn("1 kết quả", self.client.get("/?mine=1&q=dev-one").text)
+        self.assertEqual(self.move(path, "in_progress").status_code, 303)
+        self.assertEqual(self.move(path, "testing").status_code, 303)
+        self.assertEqual(self.move(path, "closed", version=3).status_code, 403)
+        self.assertEqual(self.client.get(path + "/sua").status_code, 403)
+
+        switch_user("qa-demo")
+        self.assertEqual(self.move(path, "closed", "Đạt", environment="Chrome", build="v1").status_code, 303)
+        self.assertEqual(self.move(path, "in_progress").status_code, 422)
+        self.assertEqual(self.move(path, "in_progress", "Tái hiện trên Mobile").status_code, 303)
+        self.assertIn("Tái hiện trên Mobile", self.client.get(path).text)
+        self.assertIn("100%", self.client.get("/bao-cao").text)
+        self.assertEqual(self.move(path, "testing", version=5).status_code, 403)
+
+    def test_hosted_demo_can_read_but_cannot_mutate(self):
+        self.app.config["DEMO_READ_ONLY"] = True
+        cli = self.app.test_cli_runner()
+        for _ in range(2):
+            result = cli.invoke(args=["prepare-public-demo"])
+            self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(self.login(username="demo", password="ProCheck-Demo-2026!").status_code, 302)
+        self.assertIn("4 kết quả", self.client.get("/").text)
+        self.assertEqual(self.client.get("/loi/moi").status_code, 403)
+        self.assertEqual(self.create_issue().status_code, 403)
+        self.assertEqual(self.move("/loi/1", "in_progress", version=1).status_code, 403)
 
     def test_seed_and_pagination(self):
         cli = self.app.test_cli_runner()

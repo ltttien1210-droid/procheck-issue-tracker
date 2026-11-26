@@ -14,7 +14,7 @@
     <a class="brand" href="{{ url_for('issues.index') }}"><span class="logo" aria-hidden="true">✓</span>ProCheck</a>
     {% if g.account %}
       <div class="identity">
-        <span class="username">{{ g.account.username }}</span>
+        <span class="username">{{ g.account.username }} · {{ roles.get(g.account.role, '') }}</span>
         <form method="post" action="{{ url_for('auth.logout') }}">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button class="button signout" type="submit">Đăng xuất</button>
@@ -30,6 +30,7 @@
   {% endif %}
 </header>
 <main id="main" class="shell {% block main_class %}{% endblock %}">
+  {% if config.DEMO_READ_ONLY and g.account %}<div class="alert success" role="status">Demo chỉ xem · dữ liệu minh họa</div>{% endif %}
   {% for message in get_flashed_messages() %}<div class="alert success" role="status">{{ message }}</div>{% endfor %}
   {% block content %}{% endblock %}
 </main>

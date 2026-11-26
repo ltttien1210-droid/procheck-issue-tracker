@@ -5,33 +5,64 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
-from .models import Account, Base, Issue, IssueEvent, Verification, db_session
+from .migration import upgrade_database
+from .models import ROLES, Account, Issue, IssueEvent, Verification, db_session
 
 
 def register_commands(app):
-    @app.cli.command("init-db")
-    def init_db():
-        """Create tables in the configured database."""
-        Base.metadata.create_all(app.extensions["procheck_engine"])
+    @app.cli.command("db-upgrade")
+    def db_upgrade():
+        """Apply database migrations."""
+        upgrade_database(app.extensions["procheck_engine"])
         click.echo("Đã sẵn sàng cơ sở dữ liệu ProCheck.")
+
+    app.cli.add_command(db_upgrade, "init-db")
 
     @app.cli.command("create-user")
     @click.argument("username")
-    @click.password_option(confirmation_prompt=True)
-    def create_user(username, password):
-        """Create a local workspace account."""
+    @click.option("--role", type=click.Choice(list(ROLES)), default="dev", show_default=True)
+    @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True, envvar="PROCHECK_USER_PASSWORD")
+    def create_user(username, role, password):
+        """Create a workspace account."""
         username = username.strip().lower()
         if not re.fullmatch(r"[a-z0-9_.-]{3,40}", username):
             raise click.ClickException("Tên đăng nhập từ 3–40 ký tự a-z, 0-9, dấu chấm, gạch nối hoặc gạch dưới.")
         if not 12 <= len(password) <= 128:
             raise click.ClickException("Mật khẩu phải có 12–128 ký tự.")
         with db_session() as db:
-            db.add(Account(username=username, password_hash=generate_password_hash(password)))
+            db.add(Account(username=username, role=role, password_hash=generate_password_hash(password)))
             try:
                 db.commit()
             except IntegrityError as error:
                 raise click.ClickException("Tên đăng nhập đã được sử dụng.") from error
-        click.echo(f"Đã tạo tài khoản {username}.")
+        click.echo(f"Đã tạo tài khoản {username} ({role}).")
+
+    @app.cli.command("set-role")
+    @click.argument("username")
+    @click.argument("role", type=click.Choice(list(ROLES)))
+    def set_role(username, role):
+        """Change a workspace account's role."""
+        with db_session() as db:
+            account = db.scalar(select(Account).where(Account.username == username.lower()))
+            if account is None:
+                raise click.ClickException("Không tìm thấy tài khoản.")
+            if role == "tester" and db.scalar(select(Issue.id).where(Issue.assignee_id == account.id).limit(1)):
+                raise click.ClickException("Hãy chuyển các báo cáo đang giao cho tài khoản này trước.")
+            account.role = role
+            db.commit()
+        click.echo(f"Đã cập nhật vai trò của {username} thành {role}.")
+
+    @app.cli.command("prepare-public-demo")
+    @click.pass_context
+    def prepare_public_demo(ctx):
+        """Prepare the read-only public dataset and account."""
+        if not app.config["DEMO_READ_ONLY"] or app.config["DATABASE_BACKEND"] != "sqlite":
+            raise click.ClickException("Chỉ dùng cho demo SQLite ở chế độ chỉ xem.")
+        with db_session() as db:
+            exists = db.scalar(select(Account.id).where(Account.username == "demo"))
+        if exists is None:
+            ctx.invoke(create_user, username="demo", role="tester", password="ProCheck-Demo-2026!")
+        ctx.invoke(seed_demo, username="demo")
 
     @app.cli.command("seed-demo")
     @click.argument("username")

@@ -3,7 +3,7 @@
 {% block content %}
 <header class="page-heading">
   <div><h1>Tổng quan chất lượng</h1><p>Theo dõi lỗi còn mở và kết quả kiểm thử.</p></div>
-  <a class="button primary" href="{{ url_for('issues.issue_form') }}">Tạo báo cáo</a>
+  {% if allow_write %}<a class="button primary" href="{{ url_for('issues.issue_form') }}">Tạo báo cáo</a>{% endif %}
 </header>
 
 <div class="summary" aria-label="Thống kê toàn bộ dữ liệu">
@@ -20,7 +20,7 @@
     <ul class="dashboard-list">
       {% for issue in blockers %}
       <li>
-        <div><span class="issue-id">#{{ issue.id }}</span><a class="issue-link" href="{{ url_for('issues.detail', issue_id=issue.id) }}">{{ issue.title }}</a><div class="time">{{ statuses[issue.status] }} · {{ issue.assignee or 'Chưa phân công' }}</div></div>
+        <div><span class="issue-id">#{{ issue.id }}</span><a class="issue-link" href="{{ url_for('issues.detail', issue_id=issue.id) }}">{{ issue.title }}</a><div class="time">{{ statuses[issue.status] }} · {{ issue.assignee_name or 'Chưa phân công' }}</div></div>
         <span class="pill {{ issue.severity }}">{{ severities[issue.severity] }}</span>
       </li>
       {% else %}<li>Không có lỗi mức cao hoặc nghiêm trọng đang mở.</li>{% endfor %}

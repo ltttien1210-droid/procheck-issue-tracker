@@ -18,7 +18,14 @@
       {% if values.severity not in severities %}<option value="" selected>Chọn mức độ</option>{% endif %}
       {% for key, label in severities.items() %}<option value="{{ key }}" {% if values.severity == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
     </select>{{ error_for('severity') }}</label>
-    <label>Người xử lý<input name="assignee" maxlength="80" value="{{ values.assignee }}" placeholder="Có thể để trống" {{ field_attributes('assignee') }}>{{ error_for('assignee') }}</label>
+    {% if allow_assignment %}
+    <label>Người xử lý<select name="assignee_id" {{ field_attributes('assignee_id') }}>
+      <option value="">Chưa phân công tài khoản</option>
+      {% for account in assignable %}<option value="{{ account.id }}" {% if assignment == account.id|string %}selected{% endif %}>{{ account.username }} · {{ roles[account.role] }}</option>{% endfor %}
+    </select>{{ error_for('assignee_id') }}
+    {% if issue and issue.assignee %}<small>Tên từ bản cũ: {{ issue.assignee }}</small>{% endif %}
+    </label>
+    {% endif %}
   </div>
   <div class="form-actions"><a class="button secondary" href="{{ back_url }}">Hủy</a><button class="button primary" type="submit">{{ 'Lưu thay đổi' if issue else 'Tạo báo cáo' }}</button></div>
 </form>
